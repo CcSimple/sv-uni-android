@@ -1,0 +1,190 @@
+apply plugin: 'com.android.application'
+
+static def buildTime() {
+    return new Date().format("MM-dd-HHmm")
+}
+
+static def buildDate() {
+    return new Date().format("YYYY-MM-dd")
+}
+
+def appName = "sv-uni"
+def GAPPID = ""
+def appKEY = ""
+
+android {
+    compileSdkVersion 30
+    buildToolsVersion '30.0.3'
+    defaultConfig {
+        applicationId "com.sv.uni"
+        minSdkVersion 21
+        targetSdkVersion 33
+        versionCode 100
+        versionName "1.0.0"
+        multiDexEnabled true
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+        compileOptions {
+            sourceCompatibility JavaVersion.VERSION_1_8
+            targetCompatibility JavaVersion.VERSION_1_8
+        }
+        // 用于填充 AndroidManifest.xml
+        manifestPlaceholders = [
+                // 应用名称
+                "APPNAME"           : appName,
+                // uniapp 一键登录需要配置，开通 一键登录 功能
+                "GETUI_APPID"       : GAPPID,
+                "GY_APP_ID"         : GAPPID,
+                "GT_INSTALL_CHANNEL": "HBuilder",
+                // uniapp 离线打包key
+                "UNI_BUILD_KEY"     : appKEY,
+                // 默认渠道
+                "CHANNEL"           : "default",
+                // 默认环境
+                "API_HOST"          : "dev"
+        ]
+    }
+    signingConfigs {
+        config {
+            keyAlias 'key0'
+            keyPassword '123456'
+            storeFile file('demo.jks')
+            storePassword '123456'
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.config
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        release {
+            signingConfig signingConfigs.config
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    // flavor 配置: 生成不同包名、不同图标资源文件时可用。
+    flavorDimensions "flavor"
+    productFlavors {
+        dev {
+            applicationId defaultConfig.applicationId
+            signingConfig signingConfigs.config
+            applicationIdSuffix "" // 测试包后缀,根据情况来呗,因为要离线打包 key
+//            applicationIdSuffix ".dev"
+            ndk {
+                // 仅打包 v8a 架构包, 体积更小 (很老的手机可能无法运行而已~~)
+                abiFilters 'arm64-v8a'
+            }
+            manifestPlaceholders = [
+                    APPNAME: "开发版",
+            ]
+        }
+        prod {
+            applicationId defaultConfig.applicationId
+            signingConfig signingConfigs.config
+            applicationIdSuffix ""
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
+            manifestPlaceholders = [
+                    APPNAME: appName,
+            ]
+        }
+    }
+    // 处理一下参数,文件命
+    applicationVariants.configureEach { variant ->
+        // 打release包,命个名
+        if (variant.buildType.name == 'release') {
+            variant.outputs.configureEach {
+                // 合并后的参数
+                def mergedFlavor = variant.mergedFlavor
+                def mergedAppName = mergedFlavor.manifestPlaceholders.APPNAME
+                def channel = mergedFlavor.manifestPlaceholders.CHANNEL
+                // 替换参数 渠道信息
+                if (System.getProperty('channel')) {
+                    channel = System.getProperty('channel')
+                    // 修改 manifestPlaceholders
+                    mergedFlavor.manifestPlaceholders.CHANNEL = channel
+                    mergedAppName = channelMap[channel]
+                }
+                def host = mergedFlavor.manifestPlaceholders.API_HOST
+                // 替换参数 服务地址
+                if (System.getProperty('host')) {
+                    host = System.getProperty('host')
+                    // 修改 manifestPlaceholders
+                    mergedFlavor.manifestPlaceholders.API_HOST = host
+                }
+                def type = "测试服"
+                if (host.contains('pro')) {
+                    type = "正式服"
+                }
+                def versionName = mergedFlavor.versionName
+                def versionCode = mergedFlavor.versionCode
+                // 输出名称
+                outputFileName = '(' + type + ')' + mergedAppName + '(' + channel + ')' + '-' + versionName + '(' + versionCode + ')-(' + buildTime() + ').apk'
+            }
+        }
+    }
+
+    aaptOptions {
+        additionalParameters '--auto-add-overlay'
+        ignoreAssetsPattern "!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~"
+    }
+    // 实人认证 报错
+    packagingOptions {
+        pickFirst 'lib/*/libc++_shared.so'
+    }
+}
+// 复制打包文件到 apk 目录下
+afterEvaluate {
+    android.applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            // 输出apK后，复制到指定目录
+            variant.assembleProvider.configure { task ->
+                println "???" + task.name
+                if (task.name.toLowerCase().contains('release')) {
+                    task.doLast {
+                        copy {
+                            def outputFile = variant.outputs[0].outputFile
+                            def outputFileName = variant.outputs[0].outputFileName
+                            println "outputFile: " + outputFile
+                            println "outputFileName: " + outputFileName
+                            def toDir = new File(project.rootDir, "apk/" + buildDate() + "/" + variant.name)
+                            println "toDir: " + toDir
+                            println "copying apk to " + toDir + "/" + outputFileName
+                            from outputFile
+                            into toDir
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.aar', '*.jar'], exclude: [])
+    // ↓↓↓↓↓↓↓↓↓↓ 离线打包 基础依赖 ↓↓↓↓↓↓↓↓↓↓
+    implementation 'androidx.appcompat:appcompat:1.1.0'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.0.0'
+    implementation 'androidx.core:core:1.1.0'
+    implementation "androidx.fragment:fragment:1.1.0"
+    implementation 'androidx.recyclerview:recyclerview:1.1.0'
+    implementation 'com.facebook.fresco:fresco:2.5.0'
+    implementation "com.facebook.fresco:animated-gif:2.5.0"
+    implementation 'com.github.bumptech.glide:glide:4.9.0'
+    implementation 'com.alibaba:fastjson:1.2.83'
+    implementation 'androidx.webkit:webkit:1.3.0'
+    // ↑↑↑↑↑↑↑↑↑↑ 离线打包 基础依赖 ↑↑↑↑↑↑↑↑↑↑
+    // ---------- 特殊处理 ----------
+    // 上架 google play SoLoader SDK 版本提示 需要引入
+//    implementation "com.facebook.soloader:soloader:0.10.5"
+    // ---------- 扩展功能 ----------
+    // ---------- 扩展插件 ----------
+}
+
